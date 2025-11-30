@@ -437,7 +437,7 @@ class SACAgent:
         q1_new, q2_new = self.critic(state, new_action)
         q_new = torch.min(q1_new, q2_new)
         
-        actor_loss = (current_alpha * log_prob - q_new).sum(dim=1).mean()
+        actor_loss = (current_alpha * log_prob - q_new).mean()
         
         if self.bc_weight > 0:
             bc_loss = F.mse_loss(new_action, action)
