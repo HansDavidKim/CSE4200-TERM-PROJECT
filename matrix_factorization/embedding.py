@@ -147,8 +147,12 @@ class GraphEmbedding(EmbeddingModel):
         super().__init__(file_path, k)
         self.lr = learning_rate
         self.epochs = epochs
-        # Sparse operations are not fully supported on MPS yet, so we force CPU for GraphEmbedding
-        self.device = torch.device('cpu')
+        # Sparse operations are not fully supported on MPS yet, so we force CPU for MPS.
+        # But for CUDA (Colab), we should use GPU.
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        else:
+            self.device = torch.device('cpu')
         print(f"GraphEmbedding using device: {self.device}")
         
         self.adj_matrix = None
