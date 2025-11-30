@@ -34,7 +34,8 @@ class GRU4RecWrapper(AgentWrapper):
         hidden_size = checkpoint.get('hidden_size', 128)
         
         self.model = GRU4Rec(num_items, hidden_size, num_items, embedding_dim=embedding_dim, dropout=0.0).to(device)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        # self.model.load_state_dict(checkpoint['model_state_dict'])
+        smart_load_state_dict(self.model, checkpoint['model_state_dict'], device)
         self.model.eval()
         
         self.history = []
@@ -112,7 +113,8 @@ class HybridWrapper(AgentWrapper):
         hidden_size = checkpoint.get('hidden_size', 128)
         
         model = GRU4Rec(num_items, hidden_size, num_items, embedding_dim=embedding_dim).to(device)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        # model.load_state_dict(checkpoint['model_state_dict'])
+        smart_load_state_dict(model, checkpoint['model_state_dict'], device)
         
         self.item_embeddings = model.embedding.weight.data.cpu().numpy()
         # Normalize
@@ -179,7 +181,8 @@ class SACWrapper(AgentWrapper):
         hidden_size = checkpoint.get('hidden_size', 128)
         
         gru_model = GRU4Rec(num_items, hidden_size, num_items, embedding_dim=embedding_dim).to(device)
-        gru_model.load_state_dict(checkpoint['model_state_dict'])
+        # gru_model.load_state_dict(checkpoint['model_state_dict'])
+        smart_load_state_dict(gru_model, checkpoint['model_state_dict'], device)
         item_embeddings = gru_model.embedding.weight.data
         
         # Load SAC Agent
@@ -193,8 +196,11 @@ class SACWrapper(AgentWrapper):
         actor_path = os.path.join(model_dir, "sac_actor.pth")
         critic_path = os.path.join(model_dir, "sac_critic.pth")
         
-        self.agent.actor.load_state_dict(torch.load(actor_path, map_location=device))
-        self.agent.critic.load_state_dict(torch.load(critic_path, map_location=device))
+        # self.agent.actor.load_state_dict(torch.load(actor_path, map_location=device))
+        # self.agent.critic.load_state_dict(torch.load(critic_path, map_location=device))
+        smart_load_state_dict(self.agent.actor, torch.load(actor_path, map_location=device), device)
+        smart_load_state_dict(self.agent.critic, torch.load(critic_path, map_location=device), device)
+        
         self.agent.actor.eval()
         self.agent.critic.eval()
         
@@ -222,6 +228,44 @@ class SACWrapper(AgentWrapper):
         # action is list of item_ids
         state_element = [clicked_item] + action
         self.state.append(state_element)
+
+def smart_load_state_dict(model, state_dict, device):
+    """
+    Loads state_dict into model, handling shape mismatches by padding.
+    Useful when model size (num_items) is larger than checkpoint size.
+    """
+    model_dict = model.state_dict()
+    for name, param in state_dict.items():
+        if name in model_dict:
+            if param.shape != model_dict[name].shape:
+                # Check if mismatch is due to num_items (dim 0)
+                if param.shape[0] < model_dict[name].shape[0]:
+                    # Pad
+                    pad_size = model_dict[name].shape[0] - param.shape[0]
+                    if len(param.shape) == 1:
+                        # Bias
+                        padded = torch.cat([param, torch.zeros(pad_size).to(device)], dim=0)
+                    else:
+                        # Weight
+                        # For embedding: (num_items, dim) -> pad dim 0
+                        # For Linear (out_features, in_features):
+                        # If mismatch in dim 0 (out_features): pad dim 0
+                        # If mismatch in dim 1 (in_features): pad dim 1
+                        
+                        if param.shape[1] == model_dict[name].shape[1]:
+                            # Pad dim 0
+                            padded = torch.cat([param, torch.zeros(pad_size, param.shape[1]).to(device)], dim=0)
+                        elif param.shape[0] == model_dict[name].shape[0] and param.shape[1] < model_dict[name].shape[1]:
+                             # Pad dim 1
+                             pad_size_1 = model_dict[name].shape[1] - param.shape[1]
+                             padded = torch.cat([param, torch.zeros(param.shape[0], pad_size_1).to(device)], dim=1)
+                        else:
+                            print(f"Warning: Could not pad {name} {param.shape} to {model_dict[name].shape}")
+                            continue
+                            
+                    state_dict[name] = padded
+                    
+    model.load_state_dict(state_dict, strict=False)
 
 def evaluate(
     model_type: str,
