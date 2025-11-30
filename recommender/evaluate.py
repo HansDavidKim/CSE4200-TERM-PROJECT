@@ -256,12 +256,15 @@ def evaluate(
     print(f"Using device: {device}")
     
     # Initialize Agent
+    # Note: item IDs are 1-based (1 to num_candidates).
+    # Embedding layers usually need size = num_candidates + 1 (index 0 is padding).
+    # So we pass num_candidates + 1 to the wrappers.
     if model_type == 'gru4rec':
-        agent = GRU4RecWrapper(model_path, num_candidates, device)
+        agent = GRU4RecWrapper(model_path, num_candidates + 1, device)
     elif model_type == 'hybrid':
-        agent = HybridWrapper(model_path, num_candidates, alpha, device) # model_path here is gru4rec_path
+        agent = HybridWrapper(model_path, num_candidates + 1, alpha, device) # model_path here is gru4rec_path
     elif model_type == 'sac':
-        agent = SACWrapper(model_path, gru4rec_path, num_candidates, device, seed)
+        agent = SACWrapper(model_path, gru4rec_path, num_candidates + 1, device, seed)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
         
