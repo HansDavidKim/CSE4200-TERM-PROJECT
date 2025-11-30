@@ -1,4 +1,0 @@
-typer
-numpy
-scikit-learn
-tqdm
