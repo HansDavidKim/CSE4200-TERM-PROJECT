@@ -147,7 +147,7 @@ def train_sac(
     lr_actor: float = typer.Option(3e-4, help="Actor learning rate"),
     lr_critic: float = typer.Option(3e-4, help="Critic learning rate"),
     alpha: float = typer.Option(0.2, help="Entropy regularization coefficient"),
-    bc_weight: float = typer.Option(0.0, help="Behavior Cloning weight"),
+    bc_weight: float = typer.Option(1.0, help="Behavior Cloning weight"),
     ctr_weight: float = typer.Option(0.0, help="CTR Supervision weight"),
     ema_alpha: float = typer.Option(0.1, help="EMA decay rate for user profile"),
     num_items: int = typer.Option(2000, help="Number of items"),

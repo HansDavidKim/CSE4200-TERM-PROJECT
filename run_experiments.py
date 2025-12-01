@@ -9,7 +9,7 @@ def run_command(command):
         print(f"Error running command: {command}")
         sys.exit(1)
 
-def run_experiment(num_users, num_items, steps, epochs=5, ctr_weight=0.0, ema_alpha=0.1, lr_actor=3e-4, lr_critic=3e-4, gamma=0.99, bc_weight=0.0, run_gru4rec=True, run_hybrid=True):
+def run_experiment(num_users, num_items, steps, epochs=5, ctr_weight=0.0, ema_alpha=0.1, lr_actor=3e-4, lr_critic=3e-4, gamma=0.99, bc_weight=1.0, run_gru4rec=True, run_hybrid=True):
     exp_name = f"{num_users}_{num_items}_{steps}"
     base_dir = os.path.abspath(f"experiments/{exp_name}")
     

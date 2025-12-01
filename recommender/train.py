@@ -126,7 +126,7 @@ def train_sac(
     alpha=0.2,
     slate_size=1,
     num_users_per_epoch=100,
-    bc_weight=0.0,
+    bc_weight=1.0,
     steps=50,
     diversity_weight=0.0,
     ctr_weight=0.0,
