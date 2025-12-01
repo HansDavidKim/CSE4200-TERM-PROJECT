@@ -120,6 +120,7 @@ def train_gru4rec(
     lr: float = typer.Option(None, help="Override learning rate"),
     input_dir: str = typer.Option(None, help="Override input directory"),
     output_dir: str = typer.Option(None, help="Override output directory"),
+    device: str = typer.Option("cpu", help="Device to use (cpu, cuda, mps)")
 ):
     """Train GRU4Rec model."""
     c = cfg.train.gru4rec
@@ -133,34 +134,52 @@ def train_gru4rec(
         dropout=c.dropout or 0.1,
         lr=lr or c.lr or 0.001,
         input_dir=input_dir or "preprocessed_dataset",
-        seed=c.seed or cfg.common.seed or 42
+        seed=c.seed or cfg.common.seed or 42,
+        device=device
     )
 
 @train_app.command("sac")
 def train_sac(
-    epochs: int = typer.Option(None, help="Override epochs"),
-    batch_size: int = typer.Option(None, help="Override batch size"),
-    finetune: bool = typer.Option(None, help="Override finetune_embeddings"),
-    output_dir: str = typer.Option(None, help="Override output directory"),
-    gru4rec_path: str = typer.Option(None, help="Override GRU4Rec path"),
+    epochs: int = typer.Option(10, help="Number of epochs"),
+    batch_size: int = typer.Option(64, help="Batch size"),
+    buffer_size: int = typer.Option(100000, help="Replay buffer size"),
+    gamma: float = typer.Option(0.99, help="Discount factor"),
+    lr_actor: float = typer.Option(3e-4, help="Actor learning rate"),
+    lr_critic: float = typer.Option(3e-4, help="Critic learning rate"),
+    alpha: float = typer.Option(0.2, help="Entropy regularization coefficient"),
+    bc_weight: float = typer.Option(0.0, help="Behavior Cloning weight"),
+    ctr_weight: float = typer.Option(0.0, help="CTR Supervision weight"),
+    ema_alpha: float = typer.Option(0.1, help="EMA decay rate for user profile"),
+    num_items: int = typer.Option(2000, help="Number of items"),
+    input_dir: str = typer.Option("experiments/default/processed", help="Directory containing processed data"),
+    output_dir: str = typer.Option("experiments/default/models/sac", help="Directory to save models"),
+    gru4rec_path: str = typer.Option(None, help="Path to trained GRU4Rec model directory for initialization"),
+    device: str = typer.Option("cpu", help="Device to use (cpu, cuda, mps)")
 ):
     """Train SAC agent."""
-    c = cfg.train.sac
-    train_func(
-        'sac',
-        output_dir=output_dir or c.output_dir or "trained_models/sac",
-        gru4rec_path=gru4rec_path or c.gru4rec_path or "trained_models/gru4rec",
-        epochs=epochs or c.epochs or 5,
-        batch_size=batch_size or c.batch_size or 64,
-        lr_actor=c.lr_actor or 3e-5,
-        lr_critic=c.lr_critic or 3e-5,
-        slate_size=c.slate_size or 1,
-        num_users_per_epoch=c.num_users_per_epoch or 100,
-        steps=c.steps or 50,
-        bc_weight=c.bc_weight or 0.0,
-        diversity_weight=c.diversity_weight or 0.0,
-        finetune_embeddings=finetune if finetune is not None else (c.finetune_embeddings or False),
-        seed=c.seed or cfg.common.seed or 42
+    # We need to import train_sac from recommender.train
+    from recommender.train import train_sac as train_sac_func
+    
+    train_sac_func(
+        num_items=num_items,
+        embedding_dim=64,
+        hidden_size=128,
+        action_dim=64,
+        slate_size=5,
+        epochs=epochs,
+        batch_size=batch_size,
+        buffer_size=buffer_size,
+        gamma=gamma,
+        lr_actor=lr_actor,
+        lr_critic=lr_critic,
+        alpha=alpha,
+        bc_weight=bc_weight,
+        ctr_weight=ctr_weight,
+        ema_alpha=ema_alpha,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        gru4rec_path=gru4rec_path,
+        device=device
     )
 
 # --- Evaluate Commands ---
@@ -171,6 +190,7 @@ def evaluate_gru4rec(
     model_path: str = typer.Option(None, help="Override model path"),
     output_dir: str = typer.Option(None, help="Override output directory"),
     num_items: int = typer.Option(None, help="Override num_items"),
+    device: str = typer.Option("cpu", help="Device to use (cpu, cuda, mps)")
 ):
     """Evaluate GRU4Rec."""
     c = cfg.evaluate
@@ -181,7 +201,8 @@ def evaluate_gru4rec(
         drift if drift is not None else (c.drift_scale or 0.0),
         c.seed or 42,
         output_dir or c.output_dir or "evaluation_report",
-        num_items=num_items or c.num_items or 2000
+        num_items=num_items or c.num_items or 2000,
+        device=device
     )
 
 @eval_app.command("sac")
@@ -192,6 +213,7 @@ def evaluate_sac(
     gru4rec_path: str = typer.Option(None, help="Override GRU4Rec path"),
     output_dir: str = typer.Option(None, help="Override output directory"),
     num_items: int = typer.Option(None, help="Override num_items"),
+    device: str = typer.Option("cpu", help="Device to use (cpu, cuda, mps)")
 ):
     """Evaluate SAC."""
     c = cfg.evaluate
@@ -204,7 +226,8 @@ def evaluate_sac(
         c.seed or 42,
         output_dir or c.output_dir or "evaluation_report",
         gru4rec_path=gru4rec_path or c.gru4rec_path or "trained_models/gru4rec",
-        num_items=num_items or c.num_items or 2000
+        num_items=num_items or c.num_items or 2000,
+        device=device
     )
 
 @eval_app.command("hybrid")
@@ -215,6 +238,7 @@ def evaluate_hybrid(
     model_path: str = typer.Option(None, help="Override model path (GRU4Rec path)"),
     output_dir: str = typer.Option(None, help="Override output directory"),
     num_items: int = typer.Option(None, help="Override num_items"),
+    device: str = typer.Option("cpu", help="Device to use (cpu, cuda, mps)")
 ):
     """Evaluate Hybrid."""
     c = cfg.evaluate
@@ -226,7 +250,8 @@ def evaluate_hybrid(
         c.seed or 42,
         output_dir or c.output_dir or "evaluation_report",
         alpha=alpha if alpha is not None else (c.alpha or 0.1),
-        num_items=num_items or c.num_items or 2000
+        num_items=num_items or c.num_items or 2000,
+        device=device
     )
 
 if __name__ == "__main__":

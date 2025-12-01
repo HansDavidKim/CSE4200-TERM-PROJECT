@@ -63,8 +63,17 @@ def prepare_offline_data(
             selected_item = step_data['selected_item']
             
             clicked_item_agent_id = 0
+            clicked_item_idx = -1 # Default if no click
+            
             if selected_item != -1:
                 clicked_item_agent_id = selected_item + 1
+                # Find index in slate
+                try:
+                    clicked_item_idx = agent_action_list.index(clicked_item_agent_id)
+                except ValueError:
+                    # Clicked item not in offered slate? Should not happen in normal logs.
+                    # But if it does, we might ignore this transition or treat as no click.
+                    clicked_item_idx = -1
             
             next_state_deque = state.copy()
             next_state_deque.append(clicked_item_agent_id)
@@ -72,7 +81,13 @@ def prepare_offline_data(
             
             done = False 
             
-            buffer_data.append((current_state, agent_action_list, reward, next_state, done))
+            # Only add if there was a valid click in the slate?
+            # Prompt says: "populate q_theta only for (state, clicked_item, clicked_position)"
+            # If no click, we can't update q_theta for a clicked item.
+            # We could skip adding to buffer, or add with a flag.
+            # Let's skip non-clicks for now to ensure valid gradients.
+            if clicked_item_idx != -1:
+                buffer_data.append((current_state, agent_action_list, clicked_item_idx, reward, next_state, done))
             
             state = next_state_deque
             

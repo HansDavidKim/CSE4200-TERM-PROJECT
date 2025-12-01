@@ -81,7 +81,7 @@ class GRU4RecWrapper(AgentWrapper):
                     
         # Top-K
         top_k_indices = np.argsort(scores)[-slate_size:][::-1]
-        action = [int(idx + 1) for idx in top_k_indices]
+        action = [int(idx) for idx in top_k_indices]
         
         return action
         
@@ -278,7 +278,8 @@ def evaluate(
     alpha: float = 0.1, # For Hybrid
     gru4rec_path: str = "trained_models/gru4rec", # For SAC/Hybrid
     num_items: int = 2000, # Default
-    gamma: float = 0.99 # Discount factor
+    gamma: float = 0.99, # Discount factor
+    device: str = "cpu"
 ):
     # Config
     num_candidates = num_items
@@ -296,7 +297,7 @@ def evaluate(
     torch.manual_seed(seed)
     env = create_environment(env_config)
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     # Initialize Agent
