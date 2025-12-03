@@ -30,3 +30,4 @@ python-dateutil>=2.8.0
 matplotlib
 
 gym==0.26.2
+gymnasium
