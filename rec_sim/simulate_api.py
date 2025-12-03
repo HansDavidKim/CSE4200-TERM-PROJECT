@@ -127,6 +127,7 @@ def simulate_users_csv(
     file_name="sim_output.csv",
     global_seed=42,
     sim_seed=1,
+    drift_scale=1.0,
 ):
     """문서 feature 제거 버전 CSV 저장 함수"""
 
@@ -137,6 +138,7 @@ def simulate_users_csv(
         "num_candidates": num_candidates,
         "resample_documents": False,
         "seed": sim_seed,
+        "drift_scale": drift_scale,
     }
 
     env = create_environment(env_config)

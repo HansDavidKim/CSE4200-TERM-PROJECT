@@ -20,19 +20,7 @@ hidden_size = 128
 dropout = 0.1
 lr = 0.001
 
-[train.sac]
-output_dir = "trained_models/sac"
-gru4rec_path = "trained_models/gru4rec"
-epochs = 7
-batch_size = 256
-lr_actor = 3e-5
-lr_critic = 3e-5
-slate_size = 5
-num_users_per_epoch = 100
-steps = 50
-bc_weight = 0.0
-diversity_weight = 3.0
-finetune_embeddings = true
+
 
 [evaluate]
 gru4rec_path = "trained_models/gru4rec"

@@ -3,6 +3,7 @@ import json
 import torch
 import numpy as np
 import collections
+import random
 from tqdm import tqdm
 from datetime import datetime
 from rec_sim.simulate_api import create_environment
@@ -40,10 +41,10 @@ class GRU4RecWrapper(AgentWrapper):
         
         self.history = []
         self.masked_items = set()
+        self.consumed_items = set()  # Track consumed items
         
     def reset(self):
         self.history = []
-        self.masked_items = set()
         
     def act(self, obs, slate_size, allowed_items):
         # allowed_items is ignored in favor of internal masking logic for GRU4Rec usually,
@@ -65,13 +66,11 @@ class GRU4RecWrapper(AgentWrapper):
         # 1. Mask padding (0)
         scores[0] = -np.inf
         
-        # 2. Mask items already recommended in this session (if we want to avoid repeats)
-        # evaluate_gru4rec logic: masked_items.update(slate) if no click.
-        # If click, clear mask.
-        for item in self.masked_items:
-            if item - 1 < len(scores):
-                scores[item - 1] = -np.inf
-                
+        # 2. CRITICAL: Mask consumed items
+        for item_id in self.consumed_items:
+            if 0 <= item_id < len(scores):
+                scores[item_id] = -np.inf
+        
         # 3. Mask items not in allowed_items (if provided)
         if allowed_items is not None:
             allowed_set = set(allowed_items)
@@ -96,9 +95,7 @@ class GRU4RecWrapper(AgentWrapper):
         
         if clicked_item > 0:
             self.history.append(clicked_item)
-            self.masked_items.clear()
-        else:
-            self.masked_items.update(action)
+            self.consumed_items.add(clicked_item)  # Track consumed items
 
 class HybridWrapper(AgentWrapper):
     def __init__(self, gru4rec_path, num_items, alpha=0.1, device='cpu'):
@@ -169,52 +166,23 @@ class HybridWrapper(AgentWrapper):
                 if u_norm > 0:
                     self.user_profile = self.user_profile / u_norm
 
-class SACWrapper(AgentWrapper):
-    def __init__(self, model_dir, gru4rec_path, num_items, device='cpu', seed=42):
-        self.device = device
-        
-        # Load Embeddings
-        from recommender.gru4rec import GRU4Rec
-        gru_model_path = os.path.join(gru4rec_path, "gru4rec_model.pth")
-        checkpoint = torch.load(gru_model_path, map_location=device)
-        embedding_dim = checkpoint.get('embedding_dim', 64)
-        hidden_size = checkpoint.get('hidden_size', 128)
-        
-        gru_model = GRU4Rec(num_items, hidden_size, num_items, embedding_dim=embedding_dim).to(device)
-        # gru_model.load_state_dict(checkpoint['model_state_dict'])
-        smart_load_state_dict(gru_model, checkpoint['model_state_dict'], device)
-        item_embeddings = gru_model.embedding.weight.data
-        
-        # Load SAC Agent
-        from recommender.sac_agent import SACAgent
-        # We need to know action_dim (embedding_dim) and slate_size
-        # Assuming slate_size=5 for SlateQ
-        slate_size = 5 
-        
-        self.agent = SACAgent(num_items, embedding_dim, hidden_size, embedding_dim, slate_size, device=device, item_embeddings=item_embeddings)
-        
-        actor_path = os.path.join(model_dir, "sac_actor.pth")
-        critic_path = os.path.join(model_dir, "sac_critic.pth")
-        
-        # self.agent.actor.load_state_dict(torch.load(actor_path, map_location=device))
-        # self.agent.critic.load_state_dict(torch.load(critic_path, map_location=device))
-        smart_load_state_dict(self.agent.actor, torch.load(actor_path, map_location=device), device)
-        smart_load_state_dict(self.agent.critic, torch.load(critic_path, map_location=device), device)
-        
-        self.agent.actor.eval()
-        self.agent.critic.eval()
-        
-        self.history_length = 10
+class PPOWrapper:
+    def __init__(self, agent, slate_size, history_length=10):
+        self.agent = agent
         self.slate_size = slate_size
-        self.state = collections.deque([[0] * (slate_size + 1)] * self.history_length, maxlen=self.history_length)
+        self.history_length = history_length
+        self.state = collections.deque([[0] * (slate_size + 1)] * history_length, maxlen=history_length)
         
     def reset(self):
         self.state = collections.deque([[0] * (self.slate_size + 1)] * self.history_length, maxlen=self.history_length)
         
-    def act(self, obs, slate_size, allowed_items):
-        # SACAgent.act expects state as list
+    def act(self, obs, slate_size, allowed_items, top_k=0, temperature=1.0):
         current_state = list(self.state)
-        return self.agent.act(current_state, evaluate=True, slate_size=slate_size, allowed_items=allowed_items)
+        # Enable sampling (training=True) if top_k is specified
+        use_sampling = top_k > 0
+        # PPOAgent.select_action returns (selected_items, action_emb, log_prob)
+        selected_items, _, _ = self.agent.select_action(current_state, allowed_items=allowed_items, top_k=top_k, training=use_sampling, temperature=temperature)
+        return selected_items
         
     def update(self, obs, action, next_obs, reward):
         responses = next_obs['response']
@@ -224,8 +192,10 @@ class SACWrapper(AgentWrapper):
                 clicked_item = action[i]
                 break
         
-        # State: [clicked_item, slate_item_1, ...]
-        # action is list of item_ids
+        # Pad action to slate_size if needed (for single-item actions)
+        if len(action) < self.slate_size:
+            action = action + [0] * (self.slate_size - len(action))
+        
         state_element = [clicked_item] + action
         self.state.append(state_element)
 
@@ -279,7 +249,10 @@ def evaluate(
     gru4rec_path: str = "trained_models/gru4rec", # For SAC/Hybrid
     num_items: int = 2000, # Default
     gamma: float = 0.99, # Discount factor
-    device: str = "cpu"
+    device: str = "cpu",
+    max_steps: int = 30, # Added max_steps
+    top_k: int = 0, # Added top_k
+    temperature: float = 1.0 # Added temperature
 ):
     # Config
     num_candidates = num_items
@@ -308,8 +281,44 @@ def evaluate(
         agent = GRU4RecWrapper(model_path, num_candidates + 1, device)
     elif model_type == 'hybrid':
         agent = HybridWrapper(model_path, num_candidates + 1, alpha, device) # model_path here is gru4rec_path
-    elif model_type == 'sac':
-        agent = SACWrapper(model_path, gru4rec_path, num_candidates + 1, device, seed)
+
+    elif model_type == 'ppo':
+        # Load PPO Agent
+        from recommender.ppo_agent import PPOAgent
+        # Load Embeddings from GRU4Rec
+        from recommender.gru4rec import GRU4Rec
+        gru_model_path = os.path.join(gru4rec_path, "gru4rec_model.pth")
+        checkpoint = torch.load(gru_model_path, map_location=device)
+        embedding_dim = checkpoint.get('embedding_dim', 64)
+        hidden_size = checkpoint.get('hidden_size', 128)
+        
+        gru_model = GRU4Rec(num_items, hidden_size, num_items, embedding_dim=embedding_dim).to(device)
+        smart_load_state_dict(gru_model, checkpoint['model_state_dict'], device)
+        item_embeddings = gru_model.embedding.weight.data
+        
+        # PPO Agent
+        agent_model = PPOAgent(num_items, embedding_dim, hidden_size, embedding_dim, slate_size, 3e-4, 1e-3, 0.99, 4, 0.2, 0.15, device, item_embeddings=item_embeddings)
+        
+        # Load trained weights
+        # model_path is directory or file?
+        if os.path.isdir(model_path):
+            # Find latest epoch
+            files = [f for f in os.listdir(model_path) if f.startswith("ppo_model_epoch_")]
+            if files:
+                files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+                model_file = os.path.join(model_path, files[-1])
+            else:
+                model_file = os.path.join(model_path, "ppo_model.pth")
+        else:
+            model_file = model_path
+            
+        if os.path.exists(model_file):
+            print(f"Loading PPO model from {model_file}")
+            agent_model.actor.load_state_dict(torch.load(model_file, map_location=device))
+        else:
+            print(f"Warning: PPO model not found at {model_file}")
+            
+        agent = PPOWrapper(agent_model, slate_size)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
         
@@ -325,7 +334,7 @@ def evaluate(
     total_steps = 0
     unique_items_recommended = set()
     
-    for _ in tqdm(range(num_episodes)):
+    for episode_idx in tqdm(range(num_episodes)):
         obs, _ = env.reset()
         agent.reset()
         
@@ -333,21 +342,42 @@ def evaluate(
         episode_discounted_reward = 0
         episode_steps = 0 # Added
         current_gamma = 1.0
-        recommended_in_episode = set()
+        consumed_in_episode = set()
         
         done = False
         while not done:
+            if episode_steps >= max_steps:
+                done = True
+                break
+                
             # Masking
-            allowed_items = [i for i in range(1, num_candidates + 1) if i not in recommended_in_episode]
+            allowed_items = [i for i in range(1, num_candidates + 1) if i not in consumed_in_episode]
             if len(allowed_items) < slate_size:
                 allowed_items = range(1, num_candidates + 1)
                 
             # Act
-            action = agent.act(obs, slate_size, allowed_items)
+            if isinstance(agent, PPOWrapper):
+                action = agent.act(obs, slate_size, allowed_items, top_k=top_k, temperature=temperature)
+            else:
+                action = agent.act(obs, slate_size, allowed_items)
             
             # Step
             # Env expects 0-indexed action
-            env_action = [x - 1 for x in action]
+            # Check for invalid actions
+            env_action = []
+            for x in action:
+                if 1 <= x <= num_candidates:
+                    env_action.append(x - 1)
+                else:
+                    # Invalid action, pick random
+                    # print(f"Warning: Invalid action {x} for num_candidates {num_candidates}")
+                    env_action.append(random.randint(0, num_candidates - 1))
+            
+            # Debug: Print env_action length and reward
+            # print(f"Step: {episode_steps}, Action Len: {len(env_action)}, Reward: {reward}")
+            # if len(env_action) != slate_size:
+            #     print(f"WARNING: Action length {len(env_action)} != slate_size {slate_size}")
+            
             next_obs, reward, terminated, truncated, _ = env.step(env_action)
             
             if isinstance(reward, dict):
@@ -358,19 +388,29 @@ def evaluate(
             
             # Metrics
             episode_reward += reward
-            episode_discounted_reward += current_gamma * reward # Added
-            current_gamma *= gamma # Added
+            episode_discounted_reward += current_gamma * reward
+            current_gamma *= gamma
             unique_items_recommended.update(action)
-            recommended_in_episode.update(action)
             
             responses = next_obs['response']
+            clicked_item = 0
             for resp in responses:
                 if resp['click']:
                     total_clicks += 1
                     total_watch_time += resp['watch_time']
+                    pass
+            
+            # Find clicked item from action
+            for i, resp in enumerate(responses):
+                if resp['click'] == 1:
+                    clicked_item = action[i]
+                    break
+            
+            if clicked_item > 0:
+                consumed_in_episode.add(clicked_item)
             
             total_steps += 1
-            episode_steps += 1 # Added
+            episode_steps += 1
             obs = next_obs
             
             if terminated or truncated:
@@ -386,7 +426,10 @@ def evaluate(
     avg_episode_length = np.mean(total_episode_lengths) # Added
     ctr = total_clicks / total_steps if total_steps > 0 else 0
     avg_watch_time = total_watch_time / num_episodes # Changed episodes to num_episodes
-    coverage = len(unique_items_recommended) / num_candidates
+    
+    # Filter unique items to be within valid range [1, num_candidates]
+    valid_unique_items = {i for i in unique_items_recommended if 1 <= i <= num_candidates}
+    coverage = len(valid_unique_items) / num_candidates
     
     metrics = {
         "model": model_type,
